@@ -17,7 +17,7 @@ CLIENT_SECRET = os.environ.get('QBO_CLIENT_SECRET', '')
 COMPANY_ID = '9341456604238693'
 REDIRECT_URI = 'https://banks-brewing-qbo.onrender.com/callback'
 FLASK_SECRET_KEY = 'banks-brewing-2026-mbbc'
-QBO_BASE_URL = 'https://sandbox-quickbooks.api.intuit.com'
+QBO_BASE_URL = 'https://quickbooks.api.intuit.com'
 
 app.secret_key = FLASK_SECRET_KEY
 
