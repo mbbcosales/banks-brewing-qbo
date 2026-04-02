@@ -11,7 +11,6 @@ CORS(app, origins=['*'])
 CLIENT_ID = os.environ.get('QBO_CLIENT_ID', '')
 CLIENT_SECRET = os.environ.get('QBO_CLIENT_SECRET', '')
  
-COMPANY_ID = '9341456604238693'
 REDIRECT_URI = 'https://banks-brewing-qbo.onrender.com/callback'
 FLASK_SECRET_KEY = 'banks-brewing-2026-mbbc'
 QBO_BASE_URL = 'https://quickbooks.api.intuit.com'
@@ -28,7 +27,7 @@ def health():
     return jsonify({
         'status': 'ok',
         'message': 'Banks Brewing QBO Connector running',
-        'company_id': COMPANY_ID,
+        'company_id': token_store.get('company_id', 'not set'),
         'client_id_set': bool(CLIENT_ID),
         'connected': bool(token_store.get('access_token'))
     })
@@ -44,6 +43,7 @@ def auth_start():
 @app.route('/callback')
 def callback():
     code = request.args.get('code')
+    realm_id = request.args.get('realmId')  # This is the actual company ID
     if not code:
         return jsonify({'error': 'No authorization code'}), 400
     creds = base64.b64encode(f"{CLIENT_ID}:{CLIENT_SECRET}".encode()).decode()
@@ -57,21 +57,30 @@ def callback():
     token_store['access_token'] = tokens.get('access_token')
     token_store['refresh_token'] = tokens.get('refresh_token')
     token_store['expires_at'] = (datetime.now() + timedelta(seconds=tokens.get('expires_in', 3600))).isoformat()
-    return '''<html><body style="font-family:sans-serif;text-align:center;padding:60px;background:#f9f9f9;">
+    token_store['company_id'] = realm_id  # Store the real company ID from QBO
+    return f'''<html><body style="font-family:sans-serif;text-align:center;padding:60px;background:#f9f9f9;">
     <div style="background:white;border-radius:12px;padding:40px;max-width:400px;margin:0 auto;">
     <div style="font-size:48px;">✓</div>
     <h2 style="color:#1D9E75;">Connected to QuickBooks!</h2>
+    <p style="color:#666;">Company ID: {realm_id}</p>
     <p style="color:#666;">You can close this window and return to the app.</p>
     </div></body></html>'''
  
 @app.route('/auth/status')
 def auth_status():
-    return jsonify({'connected': bool(token_store.get('access_token')), 'expires_at': token_store.get('expires_at')})
+    return jsonify({
+        'connected': bool(token_store.get('access_token')),
+        'expires_at': token_store.get('expires_at'),
+        'company_id': token_store.get('company_id', 'not set')
+    })
  
 @app.route('/auth/disconnect', methods=['POST'])
 def disconnect():
     token_store.clear()
     return jsonify({'success': True})
+ 
+def get_company_id():
+    return token_store.get('company_id', '')
  
 def refresh_token_if_needed():
     expires_at = token_store.get('expires_at')
@@ -91,43 +100,38 @@ def refresh_token_if_needed():
  
 def qbo_get(endpoint):
     refresh_token_if_needed()
-    url = f"{QBO_BASE_URL}/v3/company/{COMPANY_ID}/{endpoint}"
+    company_id = get_company_id()
+    url = f"{QBO_BASE_URL}/v3/company/{company_id}/{endpoint}"
     headers = {'Authorization': f"Bearer {token_store.get('access_token')}", 'Accept': 'application/json'}
     return requests.get(url, headers=headers)
  
 def qbo_post(endpoint, data):
     refresh_token_if_needed()
-    url = f"{QBO_BASE_URL}/v3/company/{COMPANY_ID}/{endpoint}"
+    company_id = get_company_id()
+    url = f"{QBO_BASE_URL}/v3/company/{company_id}/{endpoint}"
     headers = {'Authorization': f"Bearer {token_store.get('access_token')}", 'Content-Type': 'application/json', 'Accept': 'application/json'}
     return requests.post(url, headers=headers, json=data)
  
 def find_account(name):
-    """Find account by name directly from QBO"""
-    # Try exact name match first
     safe = name.replace("'", "\\'")
     r = qbo_get(f"query?query=select Id,Name,FullyQualifiedName from Account where Name = '{safe}'")
     if r.status_code == 200:
         accts = r.json().get('QueryResponse', {}).get('Account', [])
         if accts:
             return accts[0]['Id'], accts[0]['Name']
- 
-    # Try just the last part after colon
     short = name.split(':')[-1].strip()
     if short != name:
         safe_short = short.replace("'", "\\'")
-        r2 = qbo_get(f"query?query=select Id,Name,FullyQualifiedName from Account where Name = '{safe_short}'")
+        r2 = qbo_get(f"query?query=select Id,Name from Account where Name = '{safe_short}'")
         if r2.status_code == 200:
             accts = r2.json().get('QueryResponse', {}).get('Account', [])
             if accts:
                 return accts[0]['Id'], accts[0]['Name']
- 
-    # Try FullyQualifiedName
     r3 = qbo_get(f"query?query=select Id,Name,FullyQualifiedName from Account where FullyQualifiedName = '{safe}'")
     if r3.status_code == 200:
         accts = r3.json().get('QueryResponse', {}).get('Account', [])
         if accts:
             return accts[0]['Id'], accts[0]['Name']
- 
     return None, name
  
 def find_vendor(name):
@@ -141,21 +145,21 @@ def find_vendor(name):
  
 @app.route('/debug/all-accounts')
 def debug_all_accounts():
-    """List all accounts from QBO"""
     if not token_store.get('access_token'):
         return jsonify({'error': 'Not connected'}), 401
+    company_id = get_company_id()
     r = qbo_get("query?query=select Id,Name,FullyQualifiedName,AccountType from Account MAXRESULTS 1000")
     if r.status_code == 200:
         accts = r.json().get('QueryResponse', {}).get('Account', [])
         return jsonify({
+            'company_id_used': company_id,
             'count': len(accts),
             'accounts': [{'id': a['Id'], 'name': a['Name'], 'fqn': a.get('FullyQualifiedName',''), 'type': a.get('AccountType','')} for a in accts]
         })
-    return jsonify({'error': r.text, 'status': r.status_code}), 400
+    return jsonify({'error': r.text, 'status': r.status_code, 'company_id_used': company_id}), 400
  
 @app.route('/debug/accounts')
 def debug_accounts():
-    """Check if specific accounts can be found"""
     if not token_store.get('access_token'):
         return jsonify({'error': 'Not connected'}), 401
     names = request.args.get('names', '').split(',')
@@ -170,6 +174,8 @@ def debug_accounts():
 def create_deposit():
     if not token_store.get('access_token'):
         return jsonify({'error': 'Not connected to QuickBooks. Please authenticate first.'}), 401
+    if not get_company_id():
+        return jsonify({'error': 'Company ID not set. Please reconnect to QuickBooks.'}), 401
  
     data = request.json
     sales_date = data.get('salesDate')
@@ -184,12 +190,10 @@ def create_deposit():
     lines_data = data.get('lines', [])
     tax_acct_name = accounts.get('tax', 'Sales Tax')
  
-    # Find bank account
     bank_id, bank_name = find_account(bank_account)
     if not bank_id:
         return jsonify({'error': f'Bank account not found: {bank_account}. Check Setup tab account name.'}), 400
  
-    # Build deposit lines — skip tax line
     deposit_lines = []
     line_num = 1
     skipped = []
@@ -234,7 +238,6 @@ def create_deposit():
             }
  
     dep_response = qbo_post('deposit', deposit_body)
- 
     if dep_response.status_code not in [200, 201]:
         return jsonify({
             'error': 'Failed to create deposit in QuickBooks',
@@ -244,7 +247,6 @@ def create_deposit():
  
     deposit_id = dep_response.json().get('Deposit', {}).get('Id', 'unknown')
  
-    # AP bill for sales tax
     tax_bill_id = None
     if tax_amount > 0:
         vendor_id = find_vendor(tax_vendor)
