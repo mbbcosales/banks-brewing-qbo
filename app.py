@@ -22,7 +22,6 @@ TOKEN_URL = 'https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer'
 SCOPE = 'com.intuit.quickbooks.accounting'
  
 token_store = {}
-account_cache = {}
  
 @app.route('/health')
 def health():
@@ -58,7 +57,6 @@ def callback():
     token_store['access_token'] = tokens.get('access_token')
     token_store['refresh_token'] = tokens.get('refresh_token')
     token_store['expires_at'] = (datetime.now() + timedelta(seconds=tokens.get('expires_in', 3600))).isoformat()
-    account_cache.clear()
     return '''<html><body style="font-family:sans-serif;text-align:center;padding:60px;background:#f9f9f9;">
     <div style="background:white;border-radius:12px;padding:40px;max-width:400px;margin:0 auto;">
     <div style="font-size:48px;">✓</div>
@@ -73,7 +71,6 @@ def auth_status():
 @app.route('/auth/disconnect', methods=['POST'])
 def disconnect():
     token_store.clear()
-    account_cache.clear()
     return jsonify({'success': True})
  
 def refresh_token_if_needed():
@@ -104,33 +101,33 @@ def qbo_post(endpoint, data):
     headers = {'Authorization': f"Bearer {token_store.get('access_token')}", 'Content-Type': 'application/json', 'Accept': 'application/json'}
     return requests.post(url, headers=headers, json=data)
  
-def load_all_accounts():
-    """Load all accounts into cache once"""
-    if account_cache:
-        return
-    r = qbo_get("query?query=select Id,Name,FullyQualifiedName from Account MAXRESULTS 1000")
-    if r.status_code == 200:
-        accounts = r.json().get('QueryResponse', {}).get('Account', [])
-        for acct in accounts:
-            # Index by both short name and full path
-            account_cache[acct['Name'].lower()] = {'id': acct['Id'], 'name': acct['Name']}
-            fqn = acct.get('FullyQualifiedName', '')
-            if fqn:
-                account_cache[fqn.lower()] = {'id': acct['Id'], 'name': acct['Name']}
- 
 def find_account(name):
-    """Find account by name — tries full path first then short name"""
-    load_all_accounts()
-    # Try exact match on full path
-    key = name.lower()
-    if key in account_cache:
-        a = account_cache[key]
-        return a['id'], a['name']
-    # Try just the last part after the last colon
-    short = name.split(':')[-1].strip().lower()
-    if short in account_cache:
-        a = account_cache[short]
-        return a['id'], a['name']
+    """Find account by name directly from QBO"""
+    # Try exact name match first
+    safe = name.replace("'", "\\'")
+    r = qbo_get(f"query?query=select Id,Name,FullyQualifiedName from Account where Name = '{safe}'")
+    if r.status_code == 200:
+        accts = r.json().get('QueryResponse', {}).get('Account', [])
+        if accts:
+            return accts[0]['Id'], accts[0]['Name']
+ 
+    # Try just the last part after colon
+    short = name.split(':')[-1].strip()
+    if short != name:
+        safe_short = short.replace("'", "\\'")
+        r2 = qbo_get(f"query?query=select Id,Name,FullyQualifiedName from Account where Name = '{safe_short}'")
+        if r2.status_code == 200:
+            accts = r2.json().get('QueryResponse', {}).get('Account', [])
+            if accts:
+                return accts[0]['Id'], accts[0]['Name']
+ 
+    # Try FullyQualifiedName
+    r3 = qbo_get(f"query?query=select Id,Name,FullyQualifiedName from Account where FullyQualifiedName = '{safe}'")
+    if r3.status_code == 200:
+        accts = r3.json().get('QueryResponse', {}).get('Account', [])
+        if accts:
+            return accts[0]['Id'], accts[0]['Name']
+ 
     return None, name
  
 def find_vendor(name):
@@ -142,10 +139,25 @@ def find_vendor(name):
             return vendors[0]['Id']
     return None
  
+@app.route('/debug/all-accounts')
+def debug_all_accounts():
+    """List all accounts from QBO"""
+    if not token_store.get('access_token'):
+        return jsonify({'error': 'Not connected'}), 401
+    r = qbo_get("query?query=select Id,Name,FullyQualifiedName,AccountType from Account MAXRESULTS 1000")
+    if r.status_code == 200:
+        accts = r.json().get('QueryResponse', {}).get('Account', [])
+        return jsonify({
+            'count': len(accts),
+            'accounts': [{'id': a['Id'], 'name': a['Name'], 'fqn': a.get('FullyQualifiedName',''), 'type': a.get('AccountType','')} for a in accts]
+        })
+    return jsonify({'error': r.text, 'status': r.status_code}), 400
+ 
 @app.route('/debug/accounts')
 def debug_accounts():
-    """Debug endpoint to check account lookup"""
-    load_all_accounts()
+    """Check if specific accounts can be found"""
+    if not token_store.get('access_token'):
+        return jsonify({'error': 'Not connected'}), 401
     names = request.args.get('names', '').split(',')
     results = {}
     for name in names:
@@ -172,15 +184,12 @@ def create_deposit():
     lines_data = data.get('lines', [])
     tax_acct_name = accounts.get('tax', 'Sales Tax')
  
-    # Load all accounts
-    load_all_accounts()
- 
     # Find bank account
     bank_id, bank_name = find_account(bank_account)
     if not bank_id:
         return jsonify({'error': f'Bank account not found: {bank_account}. Check Setup tab account name.'}), 400
  
-    # Build deposit lines — skip tax line (goes to AP bill)
+    # Build deposit lines — skip tax line
     deposit_lines = []
     line_num = 1
     skipped = []
@@ -195,21 +204,19 @@ def create_deposit():
         if not acct_id:
             skipped.append(account_name)
             continue
-        line_obj = {
+        deposit_lines.append({
             "LineNum": line_num,
             "Amount": round(abs(amount), 2),
             "DetailType": "DepositLineDetail",
             "DepositLineDetail": {
                 "AccountRef": {"value": acct_id, "name": acct_name}
             }
-        }
-        deposit_lines.append(line_obj)
+        })
         line_num += 1
  
     if not deposit_lines:
-        return jsonify({'error': 'No valid deposit lines found. Account names may not match QBO.', 'skipped': skipped}), 400
+        return jsonify({'error': 'No valid deposit lines found.', 'skipped': skipped}), 400
  
-    # Build deposit body
     deposit_body = {
         "TxnDate": sales_date,
         "PrivateNote": memo,
@@ -217,7 +224,6 @@ def create_deposit():
         "Line": deposit_lines
     }
  
-    # Cash back
     if cash_back > 0:
         drawer_id, drawer_name = find_account(cash_drawer_account)
         if drawer_id:
@@ -238,7 +244,7 @@ def create_deposit():
  
     deposit_id = dep_response.json().get('Deposit', {}).get('Id', 'unknown')
  
-    # Create AP bill for sales tax
+    # AP bill for sales tax
     tax_bill_id = None
     if tax_amount > 0:
         vendor_id = find_vendor(tax_vendor)
@@ -265,7 +271,7 @@ def create_deposit():
         'depositId': deposit_id,
         'taxBillId': tax_bill_id,
         'skippedAccounts': skipped,
-        'message': f"Deposit {deposit_id} created in FSCB 6747{' + AP bill for sales tax' if tax_bill_id else ''}{' (some accounts skipped: ' + ', '.join(skipped) + ')' if skipped else ''}",
+        'message': f"Deposit {deposit_id} created in {bank_name}{' + AP bill for sales tax' if tax_bill_id else ''}{' (skipped: ' + ', '.join(skipped) + ')' if skipped else ''}",
         'salesDate': sales_date,
         'netDeposit': net_deposit
     })
