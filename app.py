@@ -17,12 +17,12 @@ FLASK_SECRET_KEY = 'banks-brewing-2026-mbbc'
 QBO_BASE_URL = 'https://quickbooks.api.intuit.com'
  
 app.secret_key = FLASK_SECRET_KEY
- 
 AUTH_BASE_URL = 'https://appcenter.intuit.com/connect/oauth2'
 TOKEN_URL = 'https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer'
 SCOPE = 'com.intuit.quickbooks.accounting'
  
 token_store = {}
+account_cache = {}
  
 @app.route('/health')
 def health():
@@ -37,56 +37,43 @@ def health():
 @app.route('/auth/start')
 def auth_start():
     if not CLIENT_ID:
-        return jsonify({'error': 'QBO_CLIENT_ID environment variable not set'}), 500
-    auth_url = (
-        f"{AUTH_BASE_URL}"
-        f"?client_id={CLIENT_ID}"
-        f"&redirect_uri={REDIRECT_URI}"
-        f"&response_type=code"
-        f"&scope={SCOPE}"
-        f"&state=banks-brewing"
-    )
+        return jsonify({'error': 'QBO_CLIENT_ID not set'}), 500
+    auth_url = (f"{AUTH_BASE_URL}?client_id={CLIENT_ID}&redirect_uri={REDIRECT_URI}"
+                f"&response_type=code&scope={SCOPE}&state=banks-brewing")
     return redirect(auth_url)
  
 @app.route('/callback')
 def callback():
     code = request.args.get('code')
     if not code:
-        return jsonify({'error': 'No authorization code received'}), 400
-    credentials = base64.b64encode(f"{CLIENT_ID}:{CLIENT_SECRET}".encode()).decode()
-    response = requests.post(TOKEN_URL, headers={
-        'Authorization': f'Basic {credentials}',
+        return jsonify({'error': 'No authorization code'}), 400
+    creds = base64.b64encode(f"{CLIENT_ID}:{CLIENT_SECRET}".encode()).decode()
+    r = requests.post(TOKEN_URL, headers={
+        'Authorization': f'Basic {creds}',
         'Content-Type': 'application/x-www-form-urlencoded'
-    }, data={
-        'grant_type': 'authorization_code',
-        'code': code,
-        'redirect_uri': REDIRECT_URI
-    })
-    if response.status_code != 200:
-        return f"<html><body><h2>Token exchange failed</h2><p>{response.text}</p></body></html>", 400
-    tokens = response.json()
+    }, data={'grant_type': 'authorization_code', 'code': code, 'redirect_uri': REDIRECT_URI})
+    if r.status_code != 200:
+        return f"<html><body><h2>Token exchange failed</h2><p>{r.text}</p></body></html>", 400
+    tokens = r.json()
     token_store['access_token'] = tokens.get('access_token')
     token_store['refresh_token'] = tokens.get('refresh_token')
     token_store['expires_at'] = (datetime.now() + timedelta(seconds=tokens.get('expires_in', 3600))).isoformat()
-    return '''
-    <html><body style="font-family:sans-serif;text-align:center;padding:60px;background:#f9f9f9;">
+    account_cache.clear()
+    return '''<html><body style="font-family:sans-serif;text-align:center;padding:60px;background:#f9f9f9;">
     <div style="background:white;border-radius:12px;padding:40px;max-width:400px;margin:0 auto;">
-    <div style="font-size:48px;margin-bottom:16px;">✓</div>
+    <div style="font-size:48px;">✓</div>
     <h2 style="color:#1D9E75;">Connected to QuickBooks!</h2>
     <p style="color:#666;">You can close this window and return to the app.</p>
-    </div></body></html>
-    '''
+    </div></body></html>'''
  
 @app.route('/auth/status')
 def auth_status():
-    return jsonify({
-        'connected': bool(token_store.get('access_token')),
-        'expires_at': token_store.get('expires_at', None)
-    })
+    return jsonify({'connected': bool(token_store.get('access_token')), 'expires_at': token_store.get('expires_at')})
  
 @app.route('/auth/disconnect', methods=['POST'])
 def disconnect():
     token_store.clear()
+    account_cache.clear()
     return jsonify({'success': True})
  
 def refresh_token_if_needed():
@@ -94,16 +81,13 @@ def refresh_token_if_needed():
     if not expires_at:
         return
     if datetime.now() >= datetime.fromisoformat(expires_at) - timedelta(minutes=5):
-        credentials = base64.b64encode(f"{CLIENT_ID}:{CLIENT_SECRET}".encode()).decode()
-        response = requests.post(TOKEN_URL, headers={
-            'Authorization': f'Basic {credentials}',
+        creds = base64.b64encode(f"{CLIENT_ID}:{CLIENT_SECRET}".encode()).decode()
+        r = requests.post(TOKEN_URL, headers={
+            'Authorization': f'Basic {creds}',
             'Content-Type': 'application/x-www-form-urlencoded'
-        }, data={
-            'grant_type': 'refresh_token',
-            'refresh_token': token_store.get('refresh_token')
-        })
-        if response.status_code == 200:
-            tokens = response.json()
+        }, data={'grant_type': 'refresh_token', 'refresh_token': token_store.get('refresh_token')})
+        if r.status_code == 200:
+            tokens = r.json()
             token_store['access_token'] = tokens.get('access_token')
             token_store['refresh_token'] = tokens.get('refresh_token')
             token_store['expires_at'] = (datetime.now() + timedelta(seconds=tokens.get('expires_in', 3600))).isoformat()
@@ -120,13 +104,33 @@ def qbo_post(endpoint, data):
     headers = {'Authorization': f"Bearer {token_store.get('access_token')}", 'Content-Type': 'application/json', 'Accept': 'application/json'}
     return requests.post(url, headers=headers, json=data)
  
-def find_account(name):
-    safe = name.replace("'", "\\'")
-    r = qbo_get(f"query?query=select Id,Name from Account where Name = '{safe}'")
+def load_all_accounts():
+    """Load all accounts into cache once"""
+    if account_cache:
+        return
+    r = qbo_get("query?query=select Id,Name,FullyQualifiedName from Account MAXRESULTS 1000")
     if r.status_code == 200:
-        accts = r.json().get('QueryResponse', {}).get('Account', [])
-        if accts:
-            return accts[0]['Id'], accts[0]['Name']
+        accounts = r.json().get('QueryResponse', {}).get('Account', [])
+        for acct in accounts:
+            # Index by both short name and full path
+            account_cache[acct['Name'].lower()] = {'id': acct['Id'], 'name': acct['Name']}
+            fqn = acct.get('FullyQualifiedName', '')
+            if fqn:
+                account_cache[fqn.lower()] = {'id': acct['Id'], 'name': acct['Name']}
+ 
+def find_account(name):
+    """Find account by name — tries full path first then short name"""
+    load_all_accounts()
+    # Try exact match on full path
+    key = name.lower()
+    if key in account_cache:
+        a = account_cache[key]
+        return a['id'], a['name']
+    # Try just the last part after the last colon
+    short = name.split(':')[-1].strip().lower()
+    if short in account_cache:
+        a = account_cache[short]
+        return a['id'], a['name']
     return None, name
  
 def find_vendor(name):
@@ -137,6 +141,18 @@ def find_vendor(name):
         if vendors:
             return vendors[0]['Id']
     return None
+ 
+@app.route('/debug/accounts')
+def debug_accounts():
+    """Debug endpoint to check account lookup"""
+    load_all_accounts()
+    names = request.args.get('names', '').split(',')
+    results = {}
+    for name in names:
+        name = name.strip()
+        acct_id, acct_name = find_account(name)
+        results[name] = {'id': acct_id, 'found': acct_id is not None, 'matched_name': acct_name}
+    return jsonify(results)
  
 @app.route('/deposit', methods=['POST'])
 def create_deposit():
@@ -156,54 +172,60 @@ def create_deposit():
     lines_data = data.get('lines', [])
     tax_acct_name = accounts.get('tax', 'Sales Tax')
  
+    # Load all accounts
+    load_all_accounts()
+ 
     # Find bank account
     bank_id, bank_name = find_account(bank_account)
+    if not bank_id:
+        return jsonify({'error': f'Bank account not found: {bank_account}. Check Setup tab account name.'}), 400
  
-    # Build deposit lines — skip the tax line (goes to AP bill instead)
+    # Build deposit lines — skip tax line (goes to AP bill)
     deposit_lines = []
     line_num = 1
+    skipped = []
     for line in lines_data:
         amount = float(line.get('amount', 0))
         account_name = line.get('account', '')
-        # Skip tax line — handled as AP bill separately
         if account_name == tax_acct_name:
             continue
         if not account_name:
             continue
         acct_id, acct_name = find_account(account_name)
+        if not acct_id:
+            skipped.append(account_name)
+            continue
         line_obj = {
             "LineNum": line_num,
             "Amount": round(abs(amount), 2),
             "DetailType": "DepositLineDetail",
             "DepositLineDetail": {
-                "AccountRef": {"name": acct_name}
+                "AccountRef": {"value": acct_id, "name": acct_name}
             }
         }
-        if acct_id:
-            line_obj["DepositLineDetail"]["AccountRef"]["value"] = acct_id
         deposit_lines.append(line_obj)
         line_num += 1
  
-    # Build deposit
+    if not deposit_lines:
+        return jsonify({'error': 'No valid deposit lines found. Account names may not match QBO.', 'skipped': skipped}), 400
+ 
+    # Build deposit body
     deposit_body = {
         "TxnDate": sales_date,
         "PrivateNote": memo,
-        "DepositToAccountRef": {"name": bank_name},
+        "DepositToAccountRef": {"value": bank_id, "name": bank_name},
         "Line": deposit_lines
     }
-    if bank_id:
-        deposit_body["DepositToAccountRef"]["value"] = bank_id
  
     # Cash back
     if cash_back > 0:
         drawer_id, drawer_name = find_account(cash_drawer_account)
-        deposit_body["CashBack"] = {
-            "Amount": round(cash_back, 2),
-            "AccountRef": {"name": drawer_name},
-            "Memo": "Daily drawer reset"
-        }
         if drawer_id:
-            deposit_body["CashBack"]["AccountRef"]["value"] = drawer_id
+            deposit_body["CashBack"] = {
+                "Amount": round(cash_back, 2),
+                "AccountRef": {"value": drawer_id, "name": drawer_name},
+                "Memo": "Daily drawer reset"
+            }
  
     dep_response = qbo_post('deposit', deposit_body)
  
@@ -211,7 +233,7 @@ def create_deposit():
         return jsonify({
             'error': 'Failed to create deposit in QuickBooks',
             'details': dep_response.text,
-            'status': dep_response.status_code
+            'skipped_accounts': skipped
         }), 400
  
     deposit_id = dep_response.json().get('Deposit', {}).get('Id', 'unknown')
@@ -220,7 +242,8 @@ def create_deposit():
     tax_bill_id = None
     if tax_amount > 0:
         vendor_id = find_vendor(tax_vendor)
-        if vendor_id:
+        tax_acct_id, tax_acct_resolved = find_account(tax_acct_name)
+        if vendor_id and tax_acct_id:
             bill_body = {
                 "VendorRef": {"value": vendor_id},
                 "TxnDate": sales_date,
@@ -229,7 +252,7 @@ def create_deposit():
                     "Amount": round(tax_amount, 2),
                     "DetailType": "AccountBasedExpenseLineDetail",
                     "AccountBasedExpenseLineDetail": {
-                        "AccountRef": {"name": tax_acct_name}
+                        "AccountRef": {"value": tax_acct_id, "name": tax_acct_resolved}
                     }
                 }]
             }
@@ -241,7 +264,8 @@ def create_deposit():
         'success': True,
         'depositId': deposit_id,
         'taxBillId': tax_bill_id,
-        'message': f"Deposit {deposit_id} created in FSCB 6747{' + AP bill for sales tax to ' + tax_vendor if tax_bill_id else ''}",
+        'skippedAccounts': skipped,
+        'message': f"Deposit {deposit_id} created in FSCB 6747{' + AP bill for sales tax' if tax_bill_id else ''}{' (some accounts skipped: ' + ', '.join(skipped) + ')' if skipped else ''}",
         'salesDate': sales_date,
         'netDeposit': net_deposit
     })
