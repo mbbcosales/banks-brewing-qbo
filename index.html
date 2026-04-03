@@ -171,9 +171,15 @@ table.map-table td:nth-child(3) { width: 28px; text-align: center; color: #888; 
       <div class="net-deposit-box">
         <div style="font-size:14px;font-weight:600;margin-bottom:8px;">Net deposit from Toast Finance Report</div>
         <p style="font-size:12px;color:#555;margin-bottom:10px;">Amount that hit your bank after Toast fees. Numbers only — no $ sign.</p>
-        <div class="field">
-          <label>Net deposit amount</label>
-          <input type="text" inputmode="decimal" id="net-deposit" placeholder="e.g. 6095.84" style="font-size:18px;font-weight:600;" />
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+          <div class="field">
+            <label>Net deposit amount</label>
+            <input type="text" inputmode="decimal" id="net-deposit" placeholder="e.g. 4654.09" style="font-size:18px;font-weight:600;" />
+          </div>
+          <div class="field">
+            <label>Toast processing fee</label>
+            <input type="text" inputmode="decimal" id="toast-fee" placeholder="e.g. 69.98" style="font-size:18px;font-weight:600;border-color:#E24B4A;" />
+          </div>
         </div>
         <button class="btn btn-primary btn-full" style="margin-top:12px;" onclick="applyNetDeposit()">Apply amount and preview entry</button>
         <div class="fee-breakdown" id="fee-breakdown">
@@ -337,7 +343,7 @@ dz.addEventListener('dragleave',()=>dz.classList.remove('drag-over'));
 dz.addEventListener('drop',e=>{e.preventDefault();dz.classList.remove('drag-over');if(e.dataTransfer.files[0])processEntry(e.dataTransfer.files[0]);});
 function handleFile(e){if(e.target.files[0])processEntry(e.target.files[0]);}
 
-let parsed=null,netConfirmed=0;
+let parsed=null,netConfirmed=0,toastFeeConfirmed=0;
 
 async function processEntry(file){
   ss('parse-status','info','Unzipping and parsing...');
@@ -419,25 +425,28 @@ function applyNetDeposit(){
   if(!parsed)return;
   const raw=document.getElementById('net-deposit').value.trim().replace(/[$,]/g,'');
   const val=parseFloat(raw);
-  if(isNaN(val)||val<=0){ss('push-status','err','Please enter a valid net deposit amount — numbers only, e.g. 6095.84');return;}
+  if(isNaN(val)||val<=0){ss('push-status','err','Please enter a valid net deposit amount — numbers only, e.g. 4654.09');return;}
+  const feeRaw=document.getElementById('toast-fee').value.trim().replace(/[$,]/g,'');
+  const feeVal=parseFloat(feeRaw);
+  if(isNaN(feeVal)||feeVal<=0){ss('push-status','err','Please enter the Toast processing fee from the Finance Report — e.g. 69.98');return;}
   netConfirmed=val;
+  toastFeeConfirmed=feeVal;
   document.getElementById('push-status').className='status';
-  renderPreview(parsed,val);
+  renderPreview(parsed,val,feeVal);
 }
 
 function fmt(n){return'$'+(n||0).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g,',');}
 
-function calcSurChargeLine(d, netDeposit){
-  // Sur Charge line = -(surcharge collected + processing fee)
-  // Processing fee = gross CC deposit - net deposit
-  const processingFee = netDeposit>0 ? Math.max(0, d.grossCCDeposit - netDeposit) : 0;
-  const combined = -(processingFee - d.surchargeCollected);
+function calcSurChargeLine(d, netDeposit, toastFee){
+  // Sur Charge line = surchargeCollected - toastFee (always negative since fee > collected)
+  const processingFee = toastFee || 0;
+  const combined = d.surchargeCollected - processingFee;
   return {combined, processingFee};
 }
 
-function renderPreview(d,netDeposit){
+function renderPreview(d,netDeposit,toastFee){
   const s=gs();const a=s.accounts||{};const vendor=s.taxVendor||'State of Mo';
-  const {combined, processingFee} = calcSurChargeLine(d, netDeposit);
+  const {combined, processingFee} = calcSurChargeLine(d, netDeposit, toastFee||toastFeeConfirmed);
   const surAcct = a['surcharge']||D.surcharge;
 
   document.getElementById('m-deposit').textContent=fmt(netDeposit);
@@ -475,9 +484,9 @@ function renderPreview(d,netDeposit){
   document.getElementById('je-preview').innerHTML=html;
 }
 
-function buildLines(d,netDeposit){
+function buildLines(d,netDeposit,toastFee){
   const s=gs();const a=s.accounts||{};
-  const {combined} = calcSurChargeLine(d, netDeposit);
+  const {combined} = calcSurChargeLine(d, netDeposit, toastFee||toastFeeConfirmed);
   const surAcct = a['surcharge']||D.surcharge;
   const taxAcct = a['tax']||D.tax;
   const lines=[];
@@ -515,7 +524,7 @@ async function pushToQBO(){
       cashDrawerAccount:a['cash-drawer']||D['cash-drawer'],
       processingFee,
       bankAccount:a['bank']||D.bank,
-      lines:buildLines(parsed,netConfirmed),
+      lines:buildLines(parsed,netConfirmed,toastFeeConfirmed),
     };
     const resp=await fetch(API+'/deposit',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
     const result=await resp.json();
@@ -540,11 +549,12 @@ function addHistory(num,net,tax,vendor,salesDate,depositDate,memo,tipsRemainder)
 }
 
 function resetUpload(){
-  parsed=null;netConfirmed=0;
+  parsed=null;netConfirmed=0;toastFeeConfirmed=0;
   document.getElementById('upload-area').style.display='block';
   document.getElementById('result-area').style.display='none';
   document.getElementById('file-in').value='';
   document.getElementById('net-deposit').value='';
+  document.getElementById('toast-fee').value='';
   document.getElementById('fee-breakdown').style.display='none';
   ['push-status','parse-status'].forEach(id=>document.getElementById(id).className='status');
 }
