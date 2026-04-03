@@ -547,7 +547,8 @@ async function pushToQBO(){
     }
   }catch(e){
     btn.disabled=false;btn.textContent='Push to QuickBooks ↗';
-    ss('push-status','err','Could not reach server. Go to https://banks-brewing-qbo.onrender.com/auth/start to reconnect.');
+    console.error('Push error:', e);
+    ss('push-status','err','Error: '+e.message+' — '+e.toString());
   }
 }
 
