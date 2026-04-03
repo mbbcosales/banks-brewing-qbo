@@ -422,7 +422,7 @@ function calcSurChargeLine(d, netDeposit){
   // Sur Charge line = -(surcharge collected + processing fee)
   // Processing fee = gross CC deposit - net deposit
   const processingFee = netDeposit>0 ? Math.max(0, d.grossCCDeposit - netDeposit) : 0;
-  const combined = -(d.surchargeCollected + processingFee);
+  const combined = -(processingFee - d.surchargeCollected);
   return {combined, processingFee};
 }
 
