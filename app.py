@@ -210,7 +210,7 @@ def create_deposit():
             continue
         deposit_lines.append({
             "LineNum": line_num,
-            "Amount": round(abs(amount), 2),
+            "Amount": round(amount, 2),
             "DetailType": "DepositLineDetail",
             "DepositLineDetail": {
                 "AccountRef": {"value": acct_id, "name": acct_name}
@@ -281,3 +281,5 @@ def create_deposit():
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port, debug=False)
+ 
+# This line intentionally left blank
