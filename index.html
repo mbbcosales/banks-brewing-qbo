@@ -511,20 +511,52 @@ function buildLines(d,netDeposit,toastFee){
 }
 
 async function pushToQBO(){
-  if(!parsed){ss('push-status','err','No data loaded — please upload a ZIP file first.');return;}
-  if(!netConfirmed||netConfirmed<=0){ss('push-status','err','Please enter the net deposit amount and click Apply first.');return;}
+  if(!parsed){ss('push-status','err','No data loaded.');return;}
+  if(!netConfirmed||netConfirmed<=0){ss('push-status','err','Please enter net deposit and click Apply first.');return;}
+  if(!toastFeeConfirmed||toastFeeConfirmed<=0){ss('push-status','err','Please enter the Toast processing fee and click Apply first.');return;}
   const salesDate=document.getElementById('sales-date').value;
   const depositDate=document.getElementById('deposit-date').value;
   const memo=document.getElementById('deposit-memo').value;
-  if(!salesDate||!depositDate){ss('push-status','err','Please set both the sales date and deposit date.');return;}
-  const s=gs();const a=s.accounts||{};
+  if(!salesDate||!depositDate){ss('push-status','err','Please set both dates.');return;}
+  
+  const s=gs();
+  const a=s.accounts||{};
   const btn=document.getElementById('push-btn');
-  btn.disabled=true;btn.textContent='Sending to QuickBooks...';
-  ss('push-status','info','Sending deposit to QuickBooks — please wait...');
+  btn.disabled=true;
+  btn.textContent='Sending to QuickBooks...';
+  ss('push-status','info','Sending to QuickBooks — please wait...');
+  
   try{
-    const processingFee=Math.max(0,parsed.grossCCDeposit-netConfirmed);
+    // Build lines array
+    const lines=[];
+    // Sales lines
+    SALES_CATS.forEach(c=>{
+      const v=parsed[c.key]||0;
+      if(!v)return;
+      lines.push({account:a[c.key]||c.default, amount:v});
+    });
+    // Toast Processing Fees (negative)
+    if(toastFeeConfirmed>0){
+      lines.push({account:'Toast Processing Fees', amount:-toastFeeConfirmed});
+    }
+    // Sales Tax (handled as AP bill, skip from deposit)
+    // Gift card redeemed (negative)
+    if(parsed.gc_redeem){
+      lines.push({account:a['gc']||D.gc, amount:-parsed.gc_redeem, memo:'Gift card redemptions'});
+    }
+    // Gift card sold (positive)  
+    if(parsed.gift_sold){
+      lines.push({account:a['gc']||D.gc, amount:parsed.gift_sold, memo:'Gift card sales'});
+    }
+    // Tips Payable
+    if(parsed.tipsRemainder>0){
+      lines.push({account:a['tips']||D.tips, amount:parsed.tipsRemainder, memo:'Tips remainder'});
+    }
+    
     const payload={
-      salesDate,depositDate,memo,
+      salesDate:salesDate,
+      depositDate:depositDate,
+      memo:memo,
       netDeposit:netConfirmed,
       accounts:a,
       taxVendor:s.taxVendor||'State of Mo',
@@ -532,24 +564,29 @@ async function pushToQBO(){
       tipsRemainder:parsed.tipsRemainder,
       cashBack:parsed.cashBack,
       cashDrawerAccount:a['cash-drawer']||D['cash-drawer'],
-      processingFee,
+      processingFee:toastFeeConfirmed,
       bankAccount:a['bank']||D.bank,
-      lines:buildLines(parsed,netConfirmed,toastFeeConfirmed),
+      lines:lines
     };
-    console.log('About to fetch, payload:', JSON.stringify(payload).slice(0,200));
-    const resp=await fetch(API+'/deposit',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+    
+    const resp=await fetch('https://banks-brewing-qbo.onrender.com/deposit',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify(payload)
+    });
     const result=await resp.json();
-    btn.disabled=false;btn.textContent='Push to QuickBooks ↗';
+    btn.disabled=false;
+    btn.textContent='Push to QuickBooks ↗';
     if(result.success){
       ss('push-status','ok','✓ '+result.message);
       addHistory(result.depositId,netConfirmed,parsed.tax,s.taxVendor||'State of Mo',salesDate,depositDate,memo,parsed.tipsRemainder);
     }else{
-      ss('push-status','err','Error: '+(result.error||'Unknown')+' — '+(result.details||''));
+      ss('push-status','err','QBO Error: '+(result.error||'Unknown')+' — '+(result.details||''));
     }
   }catch(e){
-    btn.disabled=false;btn.textContent='Push to QuickBooks ↗';
-    console.error('Push error:', e);
-    ss('push-status','err','Error: '+e.message+' — '+e.toString());
+    btn.disabled=false;
+    btn.textContent='Push to QuickBooks ↗';
+    ss('push-status','err','Network error: '+e.message);
   }
 }
 
