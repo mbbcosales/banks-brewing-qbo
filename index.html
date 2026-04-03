@@ -536,6 +536,7 @@ async function pushToQBO(){
       bankAccount:a['bank']||D.bank,
       lines:buildLines(parsed,netConfirmed,toastFeeConfirmed),
     };
+    console.log('About to fetch, payload:', JSON.stringify(payload).slice(0,200));
     const resp=await fetch(API+'/deposit',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
     const result=await resp.json();
     btn.disabled=false;btn.textContent='Push to QuickBooks ↗';
