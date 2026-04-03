@@ -291,6 +291,15 @@ function loadSetup(){
   });
 }
 
+function openQBOAuth(){
+  const url = 'https://appcenter.intuit.com/app/connect/oauth2' +
+    '?client_id=ABJkZvvqQm8fp8CilJzbVkhqKP7VhCkqsThlSOvjuCROiCWXe7' +
+    '&redirect_uri=https%3A%2F%2Fbanks-brewing-qbo.onrender.com%2Fcallback' +
+    '&response_type=code' +
+    '&scope=com.intuit.quickbooks.accounting' +
+    '&state=banks-brewing';
+  window.open(url, '_blank');
+}
 async function checkConnection(){
   const box=document.getElementById('connect-box');
   const label=document.getElementById('connect-label');
@@ -307,12 +316,12 @@ async function checkConnection(){
     }else{
       box.className='connect-box disconnected';
       label.textContent='Not connected — click Connect to authorize';
-      btns.innerHTML=`<a href="https://appcenter.intuit.com/app/connect/oauth2?client_id=ABJkZvvqQm8fp8CilJzbVkhqKP7VhCkqsThlSOvjuCROiCWXe7&redirect_uri=https://banks-brewing-qbo.onrender.com/callback&response_type=code&scope=com.intuit.quickbooks.accounting&state=banks-brewing" target="_blank" class="btn" style="font-size:12px;padding:6px 12px;background:#1D9E75;color:white;border-color:#1D9E75;text-decoration:none;">Connect to QuickBooks ↗</a><button class="btn" onclick="checkConnection()" style="font-size:12px;padding:6px 12px;margin-left:4px;">Check status</button>`;
+      btns.innerHTML=`<a href="#" onclick="openQBOAuth();return false;" target="_blank" class="btn" style="font-size:12px;padding:6px 12px;background:#1D9E75;color:white;border-color:#1D9E75;text-decoration:none;">Connect to QuickBooks ↗</a><button class="btn" onclick="checkConnection()" style="font-size:12px;padding:6px 12px;margin-left:4px;">Check status</button>`;
     }
   }catch(e){
     box.className='connect-box disconnected';
     label.textContent='Server sleeping — click Connect, wait 60s, then Check status';
-    btns.innerHTML=`<a href="https://appcenter.intuit.com/app/connect/oauth2?client_id=ABJkZvvqQm8fp8CilJzbVkhqKP7VhCkqsThlSOvjuCROiCWXe7&redirect_uri=https://banks-brewing-qbo.onrender.com/callback&response_type=code&scope=com.intuit.quickbooks.accounting&state=banks-brewing" target="_blank" class="btn" style="font-size:12px;padding:6px 12px;background:#1D9E75;color:white;border-color:#1D9E75;text-decoration:none;">Connect to QuickBooks ↗</a><button class="btn" onclick="checkConnection()" style="font-size:12px;padding:6px 12px;margin-left:4px;">Check status</button>`;
+      btns.innerHTML=`<a href="#" onclick="openQBOAuth();return false;" class="btn" style="font-size:12px;padding:6px 12px;background:#1D9E75;color:white;border-color:#1D9E75;text-decoration:none;">Connect to QuickBooks ↗</a><button class="btn" onclick="checkConnection()" style="font-size:12px;padding:6px 12px;margin-left:4px;">Check status</button>`;
   }
 }
 
