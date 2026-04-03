@@ -111,8 +111,8 @@ table.map-table td:nth-child(3) { width: 28px; text-align: center; color: #888; 
       <table class="map-table" id="sales-table"></table>
       <div class="divider"></div>
       <div class="special-box">
-        <div class="special-box-title"><span class="dot" style="background:#E24B4A"></span>Sur Charge <span class="tag tag-neg">always negative</span></div>
-        <p style="font-size:12px;color:#888;margin-bottom:8px;">Sur Charge collected minus Toast processing fee = one negative line.</p>
+        <div class="special-box-title"><span class="dot" style="background:#E24B4A"></span>Sur Charge (collected) <span class="tag tag-neg">positive revenue line</span></div>
+        <p style="font-size:12px;color:#888;margin-bottom:8px;">The surcharge collected from customers — maps to Sur Charge revenue account.</p>
         <div class="field"><label>QBO account</label><input id="acct-surcharge" type="text" oninput="autoSave()" /></div>
       </div>
       <div class="divider"></div>
@@ -251,10 +251,12 @@ const SALES_CATS=[
   {key:'wine',label:'Wine',color:'#D4537E',default:'Sales:Net Sales:Wine',toastName:'Wine'},
   {key:'catering',label:'Catering (occasional)',color:'#BA7517',default:'Sales:Net Sales:Catering Sales',toastName:'Catering'},
   {key:'membership',label:'Membership (occasional)',color:'#534AB7',default:'Sales:Membership Dues',toastName:'Membership'},
+  {key:'svc_charge',label:'Non-Grat Svc Charges',color:'#5F5E5A',default:'Sales:Gross Sales:Sur Charge',toastName:'Non-Grat Svc Charges'},
 ];
 
 const D={
   surcharge:'Sur Charge',
+  'svc_charge_default':'Sales:Gross Sales:Sur Charge',
   tax:'Sales Tax','tax-vendor':'State of Mo',
   tips:'Tips Payable','cash-drawer':'Cash Drawer',
   gc:'Sales:Net Sales:Gift Card Sales',
@@ -438,9 +440,10 @@ function applyNetDeposit(){
 function fmt(n){return'$'+(n||0).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g,',');}
 
 function calcSurChargeLine(d, netDeposit, toastFee){
-  // Sur Charge line = surchargeCollected - toastFee (always negative since fee > collected)
+  // Sur Charge collected = positive revenue line
+  // Toast Processing Fee = separate negative expense line
   const processingFee = toastFee || 0;
-  const combined = d.surchargeCollected - processingFee;
+  const combined = d.surchargeCollected; // positive
   return {combined, processingFee};
 }
 
@@ -464,8 +467,13 @@ function renderPreview(d,netDeposit,toastFee){
   html+=`<div class="section-lbl">Sales lines</div>`;
   SALES_CATS.forEach(c=>{const v=d[c.key]||0;if(!v)return;html+=`<div class="je-row"><div class="je-left"><span class="dot" style="background:${c.color}"></span>${a[c.key]||c.default}</div><span>${fmt(v)}</span></div>`;});
 
-  // ONE combined Sur Charge line
-  html+=`<div class="je-row"><div class="je-left"><span class="dot" style="background:#E24B4A"></span>${surAcct}<span class="tag tag-neg">negative</span></div><span style="color:#A32D2D;">${fmt(combined)}</span></div>`;
+  // Sur Charge collected - positive
+  if(combined) html+=`<div class="je-row"><div class="je-left"><span class="dot" style="background:#E24B4A"></span>${surAcct}</div><span>${fmt(combined)}</span></div>`;
+  // Toast Processing Fee - negative expense
+  if(processingFee>0){
+    const feeAcct=gs().accounts&&gs().accounts['toast_fee']?gs().accounts['toast_fee']:'Toast Processing Fees';
+    html+=`<div class="je-row"><div class="je-left"><span class="dot" style="background:#E24B4A"></span>${feeAcct}<span class="tag tag-neg">expense</span></div><span style="color:#A32D2D;">-${fmt(processingFee)}</span></div>`;
+  }
 
   html+=`<div class="je-row"><div class="je-left"><span class="dot" style="background:#BA7517"></span>${a['tax']||D.tax}<span class="tag tag-ap">AP</span><span class="vendor-chip">→ ${vendor}</span></div><span>${fmt(d.tax)}</span></div>`;
   if(d.gift_sold)html+=`<div class="je-row"><div class="je-left"><span class="dot" style="background:#9FE1CB"></span>${a['gc']||D.gc} — sold</div><span>${fmt(d.gift_sold)}</span></div>`;
@@ -491,8 +499,13 @@ function buildLines(d,netDeposit,toastFee){
   const taxAcct = a['tax']||D.tax;
   const lines=[];
   SALES_CATS.forEach(c=>{const v=d[c.key]||0;if(!v)return;lines.push({account:a[c.key]||c.default,amount:v});});
-  // ONE combined sur charge line (negative)
-  lines.push({account:surAcct,amount:combined,memo:'Sur Charge net of processing fee'});
+  // Sur Charge collected - positive
+  if(combined) lines.push({account:surAcct,amount:combined,memo:'Sur Charge collected'});
+  // Toast Processing Fee - negative expense
+  if(processingFee>0){
+    const feeAcct=gs().accounts&&gs().accounts['toast_fee']?gs().accounts['toast_fee']:'Toast Processing Fees';
+    lines.push({account:feeAcct,amount:-processingFee,memo:'Toast processing fee'});
+  }
   // Tax goes to AP bill separately — skip here
   if(d.gift_sold)lines.push({account:a['gc']||D.gc,amount:d.gift_sold,memo:'Gift card sales'});
   if(d.gc_redeem)lines.push({account:a['gc']||D.gc,amount:-d.gc_redeem,memo:'Gift card redemptions'});
