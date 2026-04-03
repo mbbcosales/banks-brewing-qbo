@@ -467,12 +467,10 @@ function renderPreview(d,netDeposit,toastFee){
   html+=`<div class="section-lbl">Sales lines</div>`;
   SALES_CATS.forEach(c=>{const v=d[c.key]||0;if(!v)return;html+=`<div class="je-row"><div class="je-left"><span class="dot" style="background:${c.color}"></span>${a[c.key]||c.default}</div><span>${fmt(v)}</span></div>`;});
 
-  // Sur Charge collected - positive
-  if(combined) html+=`<div class="je-row"><div class="je-left"><span class="dot" style="background:#E24B4A"></span>${surAcct}</div><span>${fmt(combined)}</span></div>`;
+  // Sur Charge collected is handled by Non-Grat Svc Charges in SALES_CATS
   // Toast Processing Fee - negative expense
   if(processingFee>0){
-    const feeAcct=gs().accounts&&gs().accounts['toast_fee']?gs().accounts['toast_fee']:'Toast Processing Fees';
-    html+=`<div class="je-row"><div class="je-left"><span class="dot" style="background:#E24B4A"></span>${feeAcct}<span class="tag tag-neg">expense</span></div><span style="color:#A32D2D;">-${fmt(processingFee)}</span></div>`;
+    html+=`<div class="je-row"><div class="je-left"><span class="dot" style="background:#E24B4A"></span>Toast Processing Fees<span class="tag tag-neg">expense</span></div><span style="color:#A32D2D;">-${fmt(processingFee)}</span></div>`;
   }
 
   html+=`<div class="je-row"><div class="je-left"><span class="dot" style="background:#BA7517"></span>${a['tax']||D.tax}<span class="tag tag-ap">AP</span><span class="vendor-chip">→ ${vendor}</span></div><span>${fmt(d.tax)}</span></div>`;
@@ -500,11 +498,10 @@ function buildLines(d,netDeposit,toastFee){
   const lines=[];
   SALES_CATS.forEach(c=>{const v=d[c.key]||0;if(!v)return;lines.push({account:a[c.key]||c.default,amount:v});});
   // Sur Charge collected - positive
-  if(combined) lines.push({account:surAcct,amount:combined,memo:'Sur Charge collected'});
+  // Sur Charge collected is handled by Non-Grat Svc Charges in SALES_CATS
   // Toast Processing Fee - negative expense
   if(processingFee>0){
-    const feeAcct=gs().accounts&&gs().accounts['toast_fee']?gs().accounts['toast_fee']:'Toast Processing Fees';
-    lines.push({account:feeAcct,amount:-processingFee,memo:'Toast processing fee'});
+    lines.push({account:'Toast Processing Fees',amount:-processingFee,memo:'Toast processing fee'});
   }
   // Tax goes to AP bill separately — skip here
   if(d.gift_sold)lines.push({account:a['gc']||D.gc,amount:d.gift_sold,memo:'Gift card sales'});
