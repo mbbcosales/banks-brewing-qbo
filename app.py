@@ -203,17 +203,28 @@ def create_deposit():
         if not account_name:
             continue
         acct_id, acct_name = find_account(account_name)
+        # For tax line, add vendor as EntityRef
+        is_tax_line = (account_name == tax_acct_name)
         if not acct_id:
             skipped.append(account_name)
             continue
-        deposit_lines.append({
+        dep_line = {
             "LineNum": line_num,
             "Amount": round(amount, 2),
             "DetailType": "DepositLineDetail",
             "DepositLineDetail": {
                 "AccountRef": {"value": acct_id, "name": acct_name}
             }
-        })
+        }
+        # For tax line, add State of Mo as the entity/vendor
+        if is_tax_line:
+            vendor_id = find_vendor(tax_vendor)
+            if vendor_id:
+                dep_line["DepositLineDetail"]["Entity"] = {
+                    "Type": "Vendor",
+                    "EntityRef": {"value": vendor_id, "name": tax_vendor}
+                }
+        deposit_lines.append(dep_line)
         line_num += 1
  
     if not deposit_lines:
