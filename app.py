@@ -200,8 +200,6 @@ def create_deposit():
     for line in lines_data:
         amount = float(line.get('amount', 0))
         account_name = line.get('account', '')
-        if account_name == tax_acct_name:
-            continue
         if not account_name:
             continue
         acct_id, acct_name = find_account(account_name)
