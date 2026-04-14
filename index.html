@@ -539,7 +539,11 @@ async function pushToQBO(){
     if(toastFeeConfirmed>0){
       lines.push({account:'Toast Processing Fees', amount:-toastFeeConfirmed});
     }
-    // Sales Tax (handled as AP bill, skip from deposit)
+    // Sales Tax - include in deposit to Sales Tax account
+    if(parsed.tax>0){
+      lines.push({account:a['tax']||D.tax, amount:parsed.tax, memo:'Sales tax'});
+    }
+    // Sales Tax (also handled as AP bill in backend)
     // Gift card redeemed (negative)
     if(parsed.gc_redeem){
       lines.push({account:a['gc']||D.gc, amount:-parsed.gc_redeem, memo:'Gift card redemptions'});
